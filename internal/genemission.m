@@ -21,13 +21,10 @@ else
     end
 end
 
-% if ~isscalar(b) || b < 0 || ~isscalar(y) || y < 0
-%     error('Hyperparameters must be scalars and >=0.');
-% end
-% 
-% if ~isscalar(T) || T < 1 || floor(T) ~= T
-%     error('Number of iterations must be >0.');
-% end
+if ~isscalar(beta_emission) || beta_emission < 0 || ...
+        ~isscalar(gamma_emission) || gamma_emission < 0
+    error('Hyperparameters must be scalars and >=0.');
+end
 
 T = length(s);
 K = max(s);
