@@ -32,8 +32,10 @@ end
 s = NaN(T, 1); % Output sequence of states
 s(1) = 1;
 K = 1; % Initial number of states
-n = 0; % Number of transitions between states (non-oracle)
-no = 1; % Number of transitions from oracle to each state
+n = zeros(K,K); % Number of transitions between states (non-oracle)
+no = zeros(1,K); % Number of transitions from oracle to each state
+no(1) = 1;
+
 for t = 1:T-1
     i = s(t);
     
