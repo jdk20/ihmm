@@ -36,6 +36,10 @@ n = zeros(K,K); % Number of transitions between states (non-oracle)
 no = zeros(1,K); % Number of transitions from oracle to each state
 no(1) = 1;
 
+if verbose
+    disp(['(t=1) Oracle new state ', num2str(K),' (prob: 100)']);
+end
+
 for t = 1:T-1
     i = s(t);
     
