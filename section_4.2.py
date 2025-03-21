@@ -1,93 +1,164 @@
 import re
 import numpy as np
 import sympy as sp
-import matplotlib.pyplot as plt
 
 from scipy.stats import gamma as gamma_dist
 from scipy.special import loggamma, gamma as gamma_func
 from scipy import optimize
 
 
-def gamma_pdf(x_, shape_, rate_):
-    # Gamma distribution (shape-rate/inverse-scale) form. All inputs are positive real numbers.
-    # x_: argument
-    # shape_: shape
-    # rate_: rate or inverse-scale
-    return (rate_**shape_/sp.gamma(shape_)) * x_**(shape_-1) * sp.exp(-rate_*x_)
+def gamma_pdf(x_: sp.Expr, shape_: sp.Expr, rate_or_scale: sp.Expr, form: str = 'rate') -> sp.Expr:
+    """
+    Gamma distribution (shape-rate or shape-scale) form. All inputs are positive real numbers.
+
+    Parameters
+    x_ (sp.Expr): argument
+    shape_ (sp.Expr): shape
+    rate_or_scale (sp.Expr): rate (inverse-scale) or scale
+
+    Returns
+    sp.Expr: Gamma distribution probability density function
+
+    Raises
+    ValueError: If form parameter is not 'rate' or 'scale'
+    """
+
+    if not x_.is_positive:
+        raise ValueError(f"Argument x needs to be positive.")
+
+    if not shape_.is_positive:
+        raise ValueError(f"Parameter shape needs to be positive.")
+
+    if not rate_or_scale.is_positive:
+        raise ValueError(f"Parameter rate or scale needs to be positive.")
+
+    if form == 'rate':
+        return (rate_or_scale**shape_/sp.gamma(shape_)) * x_**(shape_-1) * sp.exp(-rate_or_scale*x_)
+    elif form == 'scale':
+        return (1/(sp.gamma(shape_)*rate_or_scale**shape_)) * x_**(shape_-1) * sp.exp(-x_/rate_or_scale)
+    else:
+        raise ValueError(f"Parameter form={form} must be either 'rate' or 'scale'.")
 
 
-# sp.init_printing()
+# ----------------------------------------------------------------------------------------------------------------------
 # "Vague" Gamma priors, p(beta) = Gamma(beta | a, lambda) = Gamma(beta | a, theta)
-# beta: argument
-# a: shape
-# lambda: rate or inverse-scale
-# theta: scale
-beta = sp.Symbol('beta', positive=True)
-a, lambda_, theta = sp.symbols('a lambda theta', positive=True)
+# ----------------------------------------------------------------------------------------------------------------------
+# x: argument
+# a: shape, vague = 0.001
+# lambda: rate (also known as inverse-scale), vague = 0.001
+# theta: scale, vague = 1000
+x, a, lambda_, theta = sp.symbols('x a lambda theta', positive=True)
 
-# Gamma distribution (shape-rate/inverse-scale form) Section 4.2, footnote 5
-gamma_inverse_scale = (lambda_**a/sp.gamma(a)) * beta**(a-1) * sp.exp(-lambda_*beta)
-gamma_inverse_scale_fn = gamma_pdf(beta, a, lambda_)
+# Gamma distribution (shape-rate form, also known as shape-inverse scale form) Section 4.2, footnote 5
+gamma_inverse_scale = gamma_pdf(x, a, lambda_, form='rate')
 
 # Alternative representation, Gamma distribution (shape-scale form)
-gamma_scale = (1/(sp.gamma(a)*theta**a)) * beta**(a-1) * sp.exp(-beta/theta)
+gamma_scale = gamma_pdf(x, a, theta, form='scale')
 
+# ----------------------------------------------------------------------------------------------------------------------
 # Unit tests
-assert gamma_scale.subs({theta: 1/lambda_}) - gamma_inverse_scale == 0
-assert gamma_scale.subs({theta: 1/lambda_}) - gamma_inverse_scale_fn == 0
+# ----------------------------------------------------------------------------------------------------------------------
+assert gamma_scale.subs({theta: 1/lambda_}) - gamma_inverse_scale == 0  # convert rate to scale
+
+# use arg, shape, rate, scale to not collide with symbols x, a, lambda, theta
 n_iterations = 100
-for x, shape, rate in np.random.rand(n_iterations, 3):
+for arg, shape, rate in np.random.rand(n_iterations, 3):
     scale = 1/rate  # inverse-scale
 
-    value_1 = float(gamma_inverse_scale.subs({beta: x, a: shape, lambda_: rate}).evalf())
-    value_2 = float(gamma_inverse_scale_fn.subs({beta: x, a: shape, lambda_: rate}).evalf())
-    value_3 = float(gamma_scale.subs({beta: x, a: shape, theta: scale}).evalf())
-    value_4 = gamma_dist.pdf(x, a=shape, scale=scale)
+    value_1 = float(gamma_inverse_scale.subs({x: arg, a: shape, lambda_: rate}).evalf())
+    value_2 = float(gamma_scale.subs({x: arg, a: shape, theta: scale}).evalf())
+    value_3 = gamma_dist.pdf(arg, a=shape, scale=scale)  # compare with scipy implementation of Gamma PDF
 
     assert np.isclose(value_1, value_2)
     assert np.isclose(value_2, value_3)
-    assert np.isclose(value_1, value_4)
 
-# Gamma PDF
-f = sp.lambdify((beta, a, lambda_), gamma_inverse_scale, modules='numpy')
-x = np.linspace(1e-6, 20, 100)
+# Gamma PDF Comparison with scipy
 shape, rate = 9, 2
-# plt.plot(x, f(x, shape, rate), x, gamma.pdf(x, a=shape, scale=1/rate))
-# plt.show()
+f = sp.lambdify((x, a, lambda_), gamma_inverse_scale, modules='numpy')
+args = np.linspace(1e-6, 20, 100)
+assert np.isclose(np.linalg.norm(f(args, shape, rate) - gamma_dist.pdf(args, a=shape, scale=1/rate)), 0)
 
 # Prior score functions
-score_gamma_inverse_scale = sp.apart(sp.simplify(sp.diff(sp.log(gamma_inverse_scale), beta)), beta)
+score_gamma_inverse_scale = sp.apart(sp.simplify(sp.diff(sp.log(gamma_inverse_scale), x)), x)
 
-# Section 4.2
-# Newton-Rapheson helper
-z = sp.Symbol('z', real=True)
+# ----------------------------------------------------------------------------------------------------------------------
+# Hyperparameter optimisation (Section 4.2)
+# ----------------------------------------------------------------------------------------------------------------------
+# Symbols
+# Hyperparmeters
+# gamma is given the symbol gamma^s in order to not conflict with the sp.gamma() function
+alpha, beta, gamma, beta_e, gamma_e = sp.symbols('alpha beta gamma^s beta^e gamma^e', positive=True)
 
-# Prior symbols
-a_alpha, b_alpha, a_beta, b_beta, a_beta_e, b_beta_e, a_gamma, b_gamma, a_gamma_e, b_gamma_e = (
-    sp.symbols('a_alpha b_alpha a_beta b_beta a_beta_e b_beta_e a_gamma b_gamma a_gamma_e b_gamma_e', positive=True))
+# Prior: Gamma distribution
+# a: shape parameter = 0.001
+# b: rate parameter = 0.001
+a_alpha, b_alpha = sp.symbols('a_alpha b_alpha', positive=True)
+a_beta, b_beta = sp.symbols('a_beta b_beta', positive=True)
+a_beta_e, b_beta_e = sp.symbols('a_beta_e b_beta_e', positive=True)
+a_gamma, b_gamma = sp.symbols('a_gamma b_gamma', positive=True)
+a_gamma_e, b_gamma_e = sp.symbols('a_gamma_e b_gamma_e', positive=True)
 
 # Liklihood symbols
-alpha, beta, beta_e, gamma, gamma_e = sp.symbols('alpha beta beta^e gamma^s gamma^e', positive=True)
+# T_o: number of times oracle has been used for transitions
+# T_o_e: number of times oracle has been used for emissions
 T_o, T_o_e = sp.symbols('T^o T^o^e', positive=True)
 
 # Liklihood vectors and matrices
-i, j, q, K, Q = sp.symbols('i j q K Q', integer=True, positive=True)
+# i...K states
+# j...K states
+# q...Q emissions
+i, j, K, q, Q = sp.symbols('i j K q Q', positive=True, integer=True)
+# n[i,j]: state transition matrix of shape [K,K]
+# m[i,q]: observation emission matrix of shape [K,Q]
+# kappa[i]: vector of shape [K], renamed from K(i) in paper in order to not conflict with integer K
+# number of possible transitions from state i, including itself
+# K_e[i]: vector of shape [K], number of possible emissions from state i
 n = sp.IndexedBase('n', positive=True)  # from i..K, i..K
 m = sp.IndexedBase('m', positive=True)  # from i..K, q..Q
-KK = sp.IndexedBase('Kappa', positive=True)  # from i..K
+kappa = sp.IndexedBase('Kappa', positive=True)  # from i..K
 K_e = sp.IndexedBase('K^e', positive=True)  # from i..K
 
-# Liklihood equations
-liklihood_1 = sp.Product(((beta**(KK[i]-1) * sp.gamma(alpha + beta))/sp.gamma(alpha))*(sp.gamma(n[i, i] + alpha)/sp.gamma(sp.Sum(n[i, j], (j, 1, K)) + alpha + beta)), (i, 1, K))
-liklihood_2 = sp.Product((beta_e**K_e[i] * sp.gamma(beta_e))/sp.gamma(sp.Sum(m[i, q], (q, 1, Q)) + beta_e), (i, 1, K))  # P(s,y | beta)
-liklihood_3 = (gamma**K * sp.gamma(gamma))/sp.gamma(T_o + gamma)  # P(gamma | s)
-liklihood_4 = (gamma_e**K * sp.gamma(gamma_e))/sp.gamma(T_o_e + gamma_e)  # P(gamma_e | s,y)
+# Newton-Rapheson helper
+z = sp.Symbol('z', real=True)
 
-# Posterior equations (priors called directly)
-posterior_1 = gamma_pdf(alpha, a_alpha, b_alpha) * gamma_pdf(beta, a_beta, b_beta) * liklihood_1
-posterior_2 = gamma_pdf(beta_e, a_beta_e, b_beta_e) * liklihood_2  # unnormalized posterior P(beta | s,y)
-posterior_3 = gamma_pdf(gamma, a_gamma, b_gamma) * liklihood_3
-posterior_4 = gamma_pdf(gamma_e, a_gamma_e, b_gamma_e) * liklihood_4
+# ----------------------------------------------------------------------------------------------------------------------
+# Prior equations
+# ----------------------------------------------------------------------------------------------------------------------
+prior_1_alpha = gamma_pdf(alpha, a_alpha, b_alpha)
+prior_1_beta = gamma_pdf(beta, a_beta, b_beta)
+prior_2 = gamma_pdf(beta_e, a_beta_e, b_beta_e)
+prior_3 = gamma_pdf(gamma, a_gamma, b_gamma)
+prior_4 = gamma_pdf(gamma_e, a_gamma_e, b_gamma_e)
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Liklihood equations
+# ----------------------------------------------------------------------------------------------------------------------
+# Dirichlet-multinomial distributions
+# We use zero-indexing to match numpy conventions
+
+# Section 4.2 Top
+term_1 = (beta**(kappa[i]-1) * sp.gamma(alpha + beta))/sp.gamma(alpha)
+term_2 = sp.gamma(n[i, i] + alpha)/sp.gamma(sp.Sum(n[i, j], (j, 0, K-1)) + alpha + beta)
+liklihood_1 = sp.Product(term_1*term_2, (i, 0, K-1))
+
+# Section 4.2 Middle
+term_1 = (beta_e**K_e[i] * sp.gamma(beta_e))/sp.gamma(sp.Sum(m[i, q], (q, 0, Q-1)) + beta_e)
+liklihood_2 = sp.Product(term_1, (i, 0, K-1))
+
+# Section 4.2 Bottom left
+liklihood_3 = (gamma**K * sp.gamma(gamma))/sp.gamma(T_o + gamma)
+
+# Section 4.2 Bottom Right
+# There appears to be a mistake where the paper references gamma**K_e instead of gamma_e**K (K_e does not exist)
+liklihood_4 = (gamma_e**K * sp.gamma(gamma_e))/sp.gamma(T_o_e + gamma_e)
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Posterior equations
+# ----------------------------------------------------------------------------------------------------------------------
+posterior_1 = prior_1_alpha * prior_1_beta * liklihood_1  # unnormalized posterior P(alpha, beta | s)
+posterior_2 = prior_2 * liklihood_2  # unnormalized posterior P(beta_e | s, y)
+posterior_3 = prior_3 * liklihood_3  # unnormalized posterior P(gamma | s)
+posterior_4 = prior_4 * liklihood_4  # unnormalized posterior P(gamma_e | s, y)
 
 # need explicit expand_log instead of simplify
 log_posterior_1 = sp.expand_log(sp.log(posterior_1))
@@ -95,108 +166,84 @@ log_posterior_2 = sp.expand_log(sp.log(posterior_2))
 log_posterior_3 = sp.expand_log(sp.log(posterior_3))
 log_posterior_4 = sp.expand_log(sp.log(posterior_4))
 
-score_posterior_1_alpha = sp.diff(log_posterior_1, alpha)
-score_posterior_1_beta = sp.diff(log_posterior_1, beta)
-score_posterior_2 = sp.diff(log_posterior_2, beta_e)
-score_posterior_3 = sp.diff(log_posterior_3, gamma)
-score_posterior_4 = sp.diff(log_posterior_4, gamma_e)
+# Score functions (technically the derivative of the log-posterior)
+score_1_alpha = sp.diff(log_posterior_1, alpha)
+score_1_beta = sp.diff(log_posterior_1, beta)
+score_2 = sp.diff(log_posterior_2, beta_e)
+score_3 = sp.diff(log_posterior_3, gamma)
+score_4 = sp.diff(log_posterior_4, gamma_e)
 
-# Newton's method (with parameter = exp(z) to keep the parameter > 0)
-# TODO:
-# sp.log(x + 1e-10)
-# sp.log(sp.gamma(x)) -> sp.loggamma(x)
-# sp.exp(x) -> sp.Min(sp.exp(x), 50)
-# expr_replaced = expr.replace(
-#    lambda e: e.func == sp.log and len(e.args) == 1 and e.args[0].func == sp.gamma,
-#    lambda e: sp.loggamma(e.args[0].args[0])
-# )
-
-expr = score_posterior_3.subs(gamma, sp.exp(z))
-expr_prime = sp.diff(score_posterior_3, gamma).subs(gamma, sp.exp(z)) * sp.exp(z)
-
-g = sp.lambdify((z, T_o, K, a_gamma, b_gamma), expr, modules=['numpy', 'scipy'])
-gprime = sp.lambdify((z, T_o, K, a_gamma, b_gamma), expr_prime, modules=['numpy', 'scipy'])
-g(-1, 14, 7, 0.001, 0.001)
-gprime(-1, 14, 7, 0.001, 0.001)
-
-r, output = optimize.newton(g, 0, fprime=gprime,
-                            args=(14, 7, 0.001, 0.001),
-                            full_output=True,
-                            maxiter=1000)
-
-g(np.exp(r), 14, 7, 0.001, 0.001)
-gprime(np.exp(r), 14, 7, 0.001, 0.001)
-
-
-
-
-"""
-# use polygamma from scipy
-f_1 = sp.lambdify((beta_e, m, K_e, K, Q, a_beta_e, b_beta_e), log_posterior_3, modules=['numpy', 'scipy'])
-f_2 = sp.lambdify((beta_e, m, K_e, K, Q, a_beta_e, b_beta_e), score_posterior_3, modules=['numpy', 'scipy'])
-# f_1(1, np.ones((4, 4)), [1, 1, 1, 1], 3, 3, 1, 1)
-# f_2(1, np.ones((4, 4)), [1, 1, 1, 1], 3, 3, 1, 1)
-
-s = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1,
-              2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0,
-              0, 0, 0, 0, 0, 0, 1, 1, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
-              3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
-              3, 3, 3, 4, 4, 4, 4, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 6, 6, 1, 1,
-              1, 1, 1, 1, 1, 1, 1, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
-              3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
-              3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 0, 0, 0, 0, 0,
-              0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
-              3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 0, 0, 0, 0,
-              0, 0, 0, 0, 0, 0, 0, 0])
-
-n = np.array([[89.,   3.,   0.,   0.,   0.,   1.,   1.],
-             [0.,  24.,   1.,   3.,   0.,   0.,   0.],
-             [1.,   0.,  22.,   0.,   0.,   0.,   0.],
-             [0.,   0.,   0., 112.,   3.,   0.,   0.],
-             [3.,   0.,   0.,   0.,  23.,   0.,   0.],
-             [1.,   0.,   0.,   0.,   0.,   8.,   0.],
-             [0.,   1.,   0.,   0.,   0.,   0.,   9.]])
-
-n_oracle = np.array([4, 2, 1, 3, 2, 1, 1])
-
-f_1 = sp.lambdify((gamma, T_o, K, a_gamma, b_gamma), log_posterior_3, modules=['numpy', 'scipy'])
-f_2 = sp.lambdify((gamma, T_o, K, a_gamma, b_gamma), score_posterior_3, modules=['numpy', 'scipy'])
-f_1(2, np.sum(n_oracle), 7, 0.001, 0.001)
-f_2(2, np.sum(n_oracle), 7, 0.001, 0.001)
-
-# K = 7
-# T_o = 14
-# gamma = 2
-root, r = optimize.newton(f_2, 5,
-                          args=(np.sum(n_oracle), 7, 0.001, 0.001),
-                          full_output=True,
-                          maxiter=10000)
-f_2(root, np.sum(n_oracle), 7, 0.001, 0.001)
-
+# ----------------------------------------------------------------------------------------------------------------------
 # Section 4.2 Equation Unit Testing
-score_posterior_gt = sp.Sum(K_e[i]/beta_e + sp.digamma(beta_e) -
-                            sp.digamma(sp.Sum(m[i, q], (q, 1, Q)) + beta_e),
-                            (i, 1, K)) - b_beta_e + (a_beta_e - 1)/beta_e
+# ----------------------------------------------------------------------------------------------------------------------
+term_1 = K_e[i]/beta_e + sp.digamma(beta_e) - sp.digamma(sp.Sum(m[i, q], (q, 0, Q-1)) + beta_e)
+score_2_paper = sp.Sum(term_1, (i, 0, K-1)) - b_beta_e + (a_beta_e - 1)/beta_e
 
-assert sp.simplify(score_posterior_2 - score_posterior_gt) == 0
+assert sp.simplify(score_2 - score_2_paper) == 0
 
 pattern = r"\\operatorname\{polygamma\}\{\\left\(0,\s*([^)]+?)\s*\\right\)\}"
 replacement = r"\\Psi{(\1)}"
-for _ in [liklihood_1, liklihood_2, liklihood_3, liklihood_4, score_posterior_1_alpha, score_posterior_1_beta,
-          score_posterior_2, score_posterior_3, score_posterior_4]:
+for _ in [liklihood_1, liklihood_2, liklihood_3, liklihood_4, score_1_alpha, score_1_beta, score_2, score_3, score_4]:
     print('\\begin{equation}')
     print('\t', re.sub(pattern, replacement, sp.latex(_)))
     print('\\end{equation}')
     print('')
 
+# ----------------------------------------------------------------------------------------------------------------------
+# Newton Method
+# ----------------------------------------------------------------------------------------------------------------------
+# Newton's method (with parameter = exp(z) to keep the parameter > 0)
+# sp.exp(x) -> sp.Min(sp.exp(x), 50)
+# Want to avoid exp overflow and underflow
 
-x, y, z = sp.symbols('x y z', positive=True)
-f = 3*sp.log(x) + 5*sp.log(x+y) + y + x**2
-fprime = sp.diff(f, x)
+vague_gamma = 0.001
+expr, arg, values = None, None, ()
+for eq in range(5):
+    if eq == 0:
+        expr = score_1_alpha
+        arg = alpha
+        args = (beta, n, K, a_alpha, b_alpha)
+        values = (1, np.ones((3, 3)), 3, vague_gamma, vague_gamma)
+    elif eq == 1:
+        expr = score_1_beta
+        arg = beta
+        args = (alpha, n, kappa, K, a_beta, b_beta)
+        values = (1, np.eye(3), 2*np.ones(3), 3, vague_gamma, vague_gamma)
+    elif eq == 2:
+        expr = score_2
+        arg = beta_e
+        args = (m, K_e, K, Q, a_beta_e, b_beta_e)
+        values = (2*np.ones((3, 5)), 2*np.ones(5), 3, 5, vague_gamma, vague_gamma)
+    elif eq == 3:
+        expr = score_3
+        arg = gamma
+        args = (T_o, K, a_gamma, b_gamma)
+        values = (1, 3, vague_gamma, vague_gamma)
+    elif eq == 4:
+        expr = score_4
+        arg = gamma_e
+        args = (T_o_e, K, a_gamma_e, b_gamma_e)
+        values = (1, 3, vague_gamma, vague_gamma)
 
-g = f.subs(x, sp.exp(z))
-gprime = sp.diff(g, z)
+    score = expr.subs(arg, sp.exp(z))
+    f = sp.lambdify((arg,) + args, expr, modules=['numpy', 'scipy'])
+    g = sp.lambdify((z,) + args, score, modules=['numpy', 'scipy'])
+    g_prime = sp.lambdify((z,) + args, sp.diff(score, z), modules=['numpy', 'scipy'])
 
-sp.simplify(gprime - fprime.subs(x, sp.exp(z)) * sp.exp(z))
-"""
+    print(f"Equation {eq}")
+    print(f"g={g(*(0,) + values)}")
+    print(f"g'={g_prime(*(0,) + values)}")
+
+    r, output = optimize.newton(g, 0, fprime=g_prime,
+                                args=values,
+                                full_output=True,
+                                maxiter=1000)
+
+    print(f"z={np.exp(r)}")
+    print(f"g(z)={g(*(r,) + values)}")
+    print(f"f(exp(z))={f(*(np.exp(r),) + values)}")
+    print(f'Iterations: {output.iterations}')
+    print('')
+
+    assert np.isclose(g(*(r,) + values), 0)
+    assert np.isclose(f(*(np.exp(r),) + values), 0)
