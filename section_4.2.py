@@ -3,7 +3,9 @@ import numpy as np
 import sympy as sp
 import matplotlib.pyplot as plt
 
-from scipy.stats import gamma
+from scipy.stats import gamma as gamma_dist
+from scipy.special import loggamma, gamma as gamma_func
+from scipy import optimize
 
 
 def gamma_pdf(x_, shape_, rate_):
@@ -40,7 +42,7 @@ for x, shape, rate in np.random.rand(n_iterations, 3):
     value_1 = float(gamma_inverse_scale.subs({beta: x, a: shape, lambda_: rate}).evalf())
     value_2 = float(gamma_inverse_scale_fn.subs({beta: x, a: shape, lambda_: rate}).evalf())
     value_3 = float(gamma_scale.subs({beta: x, a: shape, theta: scale}).evalf())
-    value_4 = gamma.pdf(x, a=shape, scale=scale)
+    value_4 = gamma_dist.pdf(x, a=shape, scale=scale)
 
     assert np.isclose(value_1, value_2)
     assert np.isclose(value_2, value_3)
@@ -57,12 +59,15 @@ shape, rate = 9, 2
 score_gamma_inverse_scale = sp.apart(sp.simplify(sp.diff(sp.log(gamma_inverse_scale), beta)), beta)
 
 # Section 4.2
+# Newton-Rapheson helper
+z = sp.Symbol('z', real=True)
+
 # Prior symbols
 a_alpha, b_alpha, a_beta, b_beta, a_beta_e, b_beta_e, a_gamma, b_gamma, a_gamma_e, b_gamma_e = (
     sp.symbols('a_alpha b_alpha a_beta b_beta a_beta_e b_beta_e a_gamma b_gamma a_gamma_e b_gamma_e', positive=True))
 
 # Liklihood symbols
-alpha, beta, beta_e, gamma, gamma_e = sp.symbols('alpha beta beta^e gamma gamma^e', positive=True)
+alpha, beta, beta_e, gamma, gamma_e = sp.symbols('alpha beta beta^e gamma^s gamma^e', positive=True)
 T_o, T_o_e = sp.symbols('T^o T^o^e', positive=True)
 
 # Liklihood vectors and matrices
@@ -96,9 +101,78 @@ score_posterior_2 = sp.diff(log_posterior_2, beta_e)
 score_posterior_3 = sp.diff(log_posterior_3, gamma)
 score_posterior_4 = sp.diff(log_posterior_4, gamma_e)
 
+# Newton's method (with parameter = exp(z) to keep the parameter > 0)
+# TODO:
+# sp.log(x + 1e-10)
+# sp.log(sp.gamma(x)) -> sp.loggamma(x)
+# sp.exp(x) -> sp.Min(sp.exp(x), 50)
+# expr_replaced = expr.replace(
+#    lambda e: e.func == sp.log and len(e.args) == 1 and e.args[0].func == sp.gamma,
+#    lambda e: sp.loggamma(e.args[0].args[0])
+# )
+
+expr = score_posterior_3.subs(gamma, sp.exp(z))
+expr_prime = sp.diff(score_posterior_3, gamma).subs(gamma, sp.exp(z)) * sp.exp(z)
+
+g = sp.lambdify((z, T_o, K, a_gamma, b_gamma), expr, modules=['numpy', 'scipy'])
+gprime = sp.lambdify((z, T_o, K, a_gamma, b_gamma), expr_prime, modules=['numpy', 'scipy'])
+g(-1, 14, 7, 0.001, 0.001)
+gprime(-1, 14, 7, 0.001, 0.001)
+
+r, output = optimize.newton(g, 0, fprime=gprime,
+                            args=(14, 7, 0.001, 0.001),
+                            full_output=True,
+                            maxiter=1000)
+
+g(np.exp(r), 14, 7, 0.001, 0.001)
+gprime(np.exp(r), 14, 7, 0.001, 0.001)
+
+
+
+
+"""
 # use polygamma from scipy
-f_2 = sp.lambdify((a_beta_e, b_beta_e, beta_e, m, Q, K_e, K), score_posterior_2, modules=['numpy', 'scipy'])
-f_2(1, 1, 1, np.ones((4, 4)), 3, [1, 1, 1, 1], 3)
+f_1 = sp.lambdify((beta_e, m, K_e, K, Q, a_beta_e, b_beta_e), log_posterior_3, modules=['numpy', 'scipy'])
+f_2 = sp.lambdify((beta_e, m, K_e, K, Q, a_beta_e, b_beta_e), score_posterior_3, modules=['numpy', 'scipy'])
+# f_1(1, np.ones((4, 4)), [1, 1, 1, 1], 3, 3, 1, 1)
+# f_2(1, np.ones((4, 4)), [1, 1, 1, 1], 3, 3, 1, 1)
+
+s = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1,
+              2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0,
+              0, 0, 0, 0, 0, 0, 1, 1, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+              3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+              3, 3, 3, 4, 4, 4, 4, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 6, 6, 1, 1,
+              1, 1, 1, 1, 1, 1, 1, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+              3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+              3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 0, 0, 0, 0, 0,
+              0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+              3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 0, 0, 0, 0,
+              0, 0, 0, 0, 0, 0, 0, 0])
+
+n = np.array([[89.,   3.,   0.,   0.,   0.,   1.,   1.],
+             [0.,  24.,   1.,   3.,   0.,   0.,   0.],
+             [1.,   0.,  22.,   0.,   0.,   0.,   0.],
+             [0.,   0.,   0., 112.,   3.,   0.,   0.],
+             [3.,   0.,   0.,   0.,  23.,   0.,   0.],
+             [1.,   0.,   0.,   0.,   0.,   8.,   0.],
+             [0.,   1.,   0.,   0.,   0.,   0.,   9.]])
+
+n_oracle = np.array([4, 2, 1, 3, 2, 1, 1])
+
+f_1 = sp.lambdify((gamma, T_o, K, a_gamma, b_gamma), log_posterior_3, modules=['numpy', 'scipy'])
+f_2 = sp.lambdify((gamma, T_o, K, a_gamma, b_gamma), score_posterior_3, modules=['numpy', 'scipy'])
+f_1(2, np.sum(n_oracle), 7, 0.001, 0.001)
+f_2(2, np.sum(n_oracle), 7, 0.001, 0.001)
+
+# K = 7
+# T_o = 14
+# gamma = 2
+root, r = optimize.newton(f_2, 5,
+                          args=(np.sum(n_oracle), 7, 0.001, 0.001),
+                          full_output=True,
+                          maxiter=10000)
+f_2(root, np.sum(n_oracle), 7, 0.001, 0.001)
 
 # Section 4.2 Equation Unit Testing
 score_posterior_gt = sp.Sum(K_e[i]/beta_e + sp.digamma(beta_e) -
@@ -115,3 +189,14 @@ for _ in [liklihood_1, liklihood_2, liklihood_3, liklihood_4, score_posterior_1_
     print('\t', re.sub(pattern, replacement, sp.latex(_)))
     print('\\end{equation}')
     print('')
+
+
+x, y, z = sp.symbols('x y z', positive=True)
+f = 3*sp.log(x) + 5*sp.log(x+y) + y + x**2
+fprime = sp.diff(f, x)
+
+g = f.subs(x, sp.exp(z))
+gprime = sp.diff(g, z)
+
+sp.simplify(gprime - fprime.subs(x, sp.exp(z)) * sp.exp(z))
+"""

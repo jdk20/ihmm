@@ -28,7 +28,7 @@ def ihmm(alpha, beta, gamma, T):
             else:
                 p[k+1] = n_existing[k]/nc  # transition
 
-        assert np.allclose(np.sum(p), 1.0)
+        assert np.allclose(np.sum(p), 1.0), f'p={np.sum(p)}'
         choice = rng.choice(a=1+K, size=1, p=p)
 
         # Oracle
@@ -91,21 +91,25 @@ def ihmm(alpha, beta, gamma, T):
         assert n.shape[0] == K
         assert n_oracle.shape[0] == K
 
-    return s
+    return s, n, n_oracle
 
 
 # Figure 1
 fig, axs = plt.subplots(2, 2, figsize=(15, 10))
-s = ihmm(alpha=0.1, beta=1000, gamma=100, T=250)
+"""
+s, n, n_oracle = ihmm(alpha=0.1, beta=1000, gamma=100, T=250)
 axs[0, 0].stairs(s, color='k')
 
 s = ihmm(alpha=0, beta=0.1, gamma=100, T=250)
 axs[0, 1].stairs(s, color='k')
+"""
 
-s = ihmm(alpha=8, beta=2, gamma=2, T=250)
+s, n, n_oracle = ihmm(alpha=8, beta=2, gamma=2, T=250)
 axs[1, 0].stairs(s, color='k')
 
+"""
 s = ihmm(alpha=1, beta=1, gamma=10000, T=250)
 axs[1, 1].stairs(s, color='k')
 
 plt.show()
+"""
