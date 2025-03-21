@@ -1,9 +1,9 @@
 import re
+import pickle
 import numpy as np
 import sympy as sp
 
 from scipy.stats import gamma as gamma_dist
-from scipy.special import loggamma, gamma as gamma_func
 from scipy import optimize
 
 
@@ -247,3 +247,6 @@ for eq in range(5):
 
     assert np.isclose(g(*(r,) + values), 0)
     assert np.isclose(f(*(np.exp(r),) + values), 0)
+
+    with open(f'equation_{eq}.pkl', 'wb') as p:
+        pickle.dump(score, p)
