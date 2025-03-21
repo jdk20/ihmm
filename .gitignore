@@ -1,3 +1,6 @@
+.idea/
+
 *.pdf
 scratch.m
 *.asv
+*.pkl
