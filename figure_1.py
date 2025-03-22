@@ -1,15 +1,13 @@
-import sympy as sp
-from sympy.stats import Gamma, density
 import numpy as np
 import matplotlib.pyplot as plt
 
 
-def ihmm(alpha, beta, gamma, T):
+def figure_1(alpha, beta, gamma, T):
     K, current_state, n_existing, nc = 0, None, None, None
     s = np.empty(shape=0, dtype=np.int64)
     n = np.empty(shape=(K, K), dtype=np.float64)
     n_oracle = np.empty(shape=K, dtype=np.int64)
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(1337+8)
 
     for t in range(T):
         p = np.zeros(shape=1+K, dtype=np.float64)  # oracle and all other transitions
@@ -83,10 +81,10 @@ def ihmm(alpha, beta, gamma, T):
         print(f't={t}: {txt} {next_state} from {current_state} with p={p_txt}')
 
         # Debug
-        m = np.zeros_like(n)
-        m[np.diag_indices_from(m)] += alpha
-        np.add.at(m, (s[:-1], s[1:]), 1)
-        assert np.mean(n == m) == 1
+        n_debug = np.zeros_like(n)
+        n_debug[np.diag_indices_from(n_debug)] += alpha
+        np.add.at(n_debug, (s[:-1], s[1:]), 1)
+        assert np.mean(n == n_debug) == 1
 
         assert n.shape[0] == K
         assert n_oracle.shape[0] == K
@@ -96,20 +94,16 @@ def ihmm(alpha, beta, gamma, T):
 
 # Figure 1
 fig, axs = plt.subplots(2, 2, figsize=(15, 10))
-"""
-s, n, n_oracle = ihmm(alpha=0.1, beta=1000, gamma=100, T=250)
+s, _, _ = figure_1(alpha=0.1, beta=1000, gamma=100, T=250)
 axs[0, 0].stairs(s, color='k')
 
-s = ihmm(alpha=0, beta=0.1, gamma=100, T=250)
+s, _, _ = figure_1(alpha=0, beta=0.1, gamma=100, T=250)
 axs[0, 1].stairs(s, color='k')
-"""
 
-s, n, n_oracle = ihmm(alpha=8, beta=2, gamma=2, T=250)
+s, _, _ = figure_1(alpha=8, beta=2, gamma=2, T=250)
 axs[1, 0].stairs(s, color='k')
 
-"""
-s = ihmm(alpha=1, beta=1, gamma=10000, T=250)
+s, _, _ = figure_1(alpha=1, beta=1, gamma=10000, T=250)
 axs[1, 1].stairs(s, color='k')
 
 plt.show()
-"""

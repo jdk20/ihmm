@@ -1,5 +1,7 @@
 import re
 import pickle
+from typing import BinaryIO
+
 import numpy as np
 import sympy as sp
 
@@ -213,7 +215,7 @@ for eq in range(5):
         expr = score_2
         arg = beta_e
         args = (m, K_e, K, Q, a_beta_e, b_beta_e)
-        values = (2*np.ones((3, 5)), 2*np.ones(5), 3, 5, vague_gamma, vague_gamma)
+        values = (np.ones((3, 5)), 2*np.ones(5), 3, 5, vague_gamma, vague_gamma)  # bete_e ** K_e can be unstable
     elif eq == 3:
         expr = score_3
         arg = gamma
@@ -239,7 +241,8 @@ for eq in range(5):
                                 full_output=True,
                                 maxiter=1000)
 
-    print(f"z={np.exp(r)}")
+    print(f"z={r}")
+    print(f"exp(z)={np.exp(r)}")
     print(f"g(z)={g(*(r,) + values)}")
     print(f"f(exp(z))={f(*(np.exp(r),) + values)}")
     print(f'Iterations: {output.iterations}')
