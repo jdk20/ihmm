@@ -1,167 +1,76 @@
-import numpy as np
+from pickle import load
+from os.path import join
+from sympy import diff, exp, lambdify, symbols, IndexedBase
 
 
-def hdp_hidden(current_state, n, n_oracle, alpha, beta, gamma, verbose=True):
-    """
-    n:
-    n_oracle
-    alpha:
-    beta:
-    gamma:
-    """
-    K = n.shape[0]
-    p = np.zeros(shape=1+K, dtype=np.float64)  # oracle and all other transitions
+def hp_optimization_equations(mainpath: str = ''):
+    # ------------------------------------------------------------------------------------------------------------------
+    # Hyperparameter optimisation (Section 4.2)
+    # ------------------------------------------------------------------------------------------------------------------
+    # Symbols
+    # Hyperparmeters
+    # gamma is given the symbol gamma^s in order to not conflict with the sp.gamma() function
+    alpha, beta, gamma, beta_e, gamma_e = symbols('alpha beta gamma^s beta^e gamma^e', positive=True)
 
-    n_existing = n[current_state, :]  # transitions to existing states (including self)
-    nc = np.sum(n_existing) + beta + alpha  # normalizing constant
-    p[0] = beta/nc  # oracle
+    # Prior: Gamma distribution
+    # a: shape parameter = 0.001
+    # b: rate parameter = 0.001
+    a_alpha, b_alpha = symbols('a_alpha b_alpha', positive=True)
+    a_beta, b_beta = symbols('a_beta b_beta', positive=True)
+    a_beta_e, b_beta_e = symbols('a_beta_e b_beta_e', positive=True)
+    a_gamma, b_gamma = symbols('a_gamma b_gamma', positive=True)
+    a_gamma_e, b_gamma_e = symbols('a_gamma_e b_gamma_e', positive=True)
 
-    for k in range(K):
-        if k == current_state:
-            p[k+1] = (n_existing[k] + alpha)/nc  # self-transition
-        else:
-            p[k+1] = n_existing[k]/nc  # transition
+    # Liklihood symbols
+    # T_o: number of times oracle has been used for transitions
+    # T_o_e: number of times oracle has been used for emissions
+    T_o, T_o_e = symbols('T^o T^o^e', positive=True)
 
-    assert np.allclose(np.sum(p), 1.0), f'p={np.sum(p)}'
-    choice = rng.choice(a=1+K, size=1, p=p)
+    # Liklihood vectors and matrices
+    # i...K states
+    # j...K states
+    # q...Q emissions
+    i, j, K, q, Q = symbols('i j K q Q', positive=True, integer=True)
+    # n[i,j]: state transition matrix of shape [K,K]
+    # m[i,q]: observation emission matrix of shape [K,Q]
+    # kappa[i]: vector of shape [K], renamed from K(i) in paper in order to not conflict with integer K
+    # number of possible transitions from state i, including itself
+    # K_e[i]: vector of shape [K], number of possible emissions from state i
+    n = IndexedBase('n', positive=True)  # from i..K, i..K
+    m = IndexedBase('m', positive=True)  # from i..K, q..Q
+    kappa = IndexedBase('Kappa', positive=True)  # from i..K
+    K_e = IndexedBase('K^e', positive=True)  # from i..K
 
-    # Oracle
-    if choice == 0:
-        p_oracle = np.zeros(shape=1+K, dtype=np.float64)  # new state and all other transitions
-        nc_oracle = np.sum(n_oracle) + gamma  # normalizing constant
+    # Newton-Rapheson helper
+    z = symbols('z', real=True)
 
-        p_oracle[0] = gamma/nc_oracle  # new state
+    equations = {}
+    for eq in range(5):
+        with open(join(mainpath, f'equation_{eq}.pkl'), 'rb') as file:
+            expr = load(file)
 
-        for k in range(K):
-            p_oracle[k+1] = n_oracle[k]/nc_oracle
+        if eq == 0:
+            arg = alpha
+            args = (beta, n, K, a_alpha, b_alpha)
+        elif eq == 1:
+            arg = beta
+            args = (alpha, n, kappa, K, a_beta, b_beta)
+        elif eq == 2:
+            arg = beta_e
+            args = (m, K_e, K, Q, a_beta_e, b_beta_e)
+        elif eq == 3:
+            arg = gamma
+            args = (T_o, K, a_gamma, b_gamma)
+        elif eq == 4:
+            arg = gamma_e
+            args = (T_o_e, K, a_gamma_e, b_gamma_e)
 
-        assert np.allclose(np.sum(p_oracle), 1.0)
-        choice_oracle = rng.choice(a=1+K, size=1, p=p_oracle)
-        # Oracle New State
-        if choice_oracle == 0:
-            K += 1  # increase state counter
-            next_state = K - 1  # for zero-index
+        score = expr.subs(arg, exp(z))
+        g = lambdify((z,) + args, score, modules=['numpy', 'scipy'])
+        g_prime = lambdify((z,) + args, diff(score, z), modules=['numpy', 'scipy'])
 
-            # Expand n and n_oracle
-            n_oracle = np.append(n_oracle, 0)
-            n = np.pad(n, pad_width=[(0, 1), (0, 1)], mode='constant')
+        equations[eq] = {}
+        equations[eq]['g'] = g
+        equations[eq]['g_prime'] = g_prime
 
-            # Add alpha to self-transition prob for new state
-            n[next_state, next_state] += alpha
-            txt = 'Oracle New State'
-        # Oracle Transition to Self/Existing State
-        else:
-            next_state = choice_oracle[0] - 1
-            if current_state == next_state:
-                txt = 'Oracle Self-Transition to State'
-            else:
-                txt = 'Oracle Existing Transition to State'
-
-        n_oracle[next_state] += 1  # increase state transition via oracle
-        p_txt = p_oracle[choice_oracle][0]
-
-    # Non-Oracle Transition to Self/Existing State
-    else:
-        next_state = choice[0] - 1
-        if current_state == next_state:
-            txt = 'Self-Transition to State'
-        else:
-            txt = 'Existing Transition to State'
-        p_txt = p[choice][0]
-
-    # Append next state to state sequence and update counts
-    n[current_state, next_state] += 1
-
-    if verbose:
-        print(f'{txt} {next_state} from {current_state} with p={p_txt}')
-
-    assert n.shape[0] == K
-    assert n_oracle.shape[0] == K
-
-    return next_state, n, n_oracle
-
-
-def hdp_emission(current_emission, m, m_oracle, beta_e, gamma_e, verbose=True):
-    """
-    m:
-    m_oracle
-    beta_e:
-    gamma_e:
-    """
-    K = m.shape[0]
-    p = np.zeros(shape=1+K, dtype=np.float64)  # oracle and all other transitions
-
-    m_existing = m[current_state, :]  # transitions to existing states (including self)
-    nc = np.sum(m_existing) + beta_e  # normalizing constant
-    p[0] = beta_e/nc  # oracle
-
-    for k in range(K):
-        p[k+1] = m_existing[k]/nc  # transition
-
-    assert np.allclose(np.sum(p), 1.0), f'p={np.sum(p)}'
-    choice = rng.choice(a=1+K, size=1, p=p)
-
-    # Oracle
-    if choice == 0:
-        p_oracle = np.zeros(shape=1+K, dtype=np.float64)  # new state and all other transitions
-        nc_oracle = np.sum(m_oracle) + gamma_e  # normalizing constant
-
-        p_oracle[0] = gamma_e/nc_oracle  # new state
-
-        for k in range(K):
-            p_oracle[k+1] = m_oracle[k]/nc_oracle
-
-        assert np.allclose(np.sum(p_oracle), 1.0)
-        choice_oracle = rng.choice(a=1+K, size=1, p=p_oracle)
-        # Oracle New Emission
-        if choice_oracle == 0:
-            K += 1  # increase state counter
-            next_emission = K - 1  # for zero-index
-
-            # Expand n and n_oracle
-            m_oracle = np.append(m_oracle, 0)
-            m = np.pad(n, pad_width=[(0, 1), (0, 1)], mode='constant')
-
-            txt = 'Oracle New Emission'
-        # Oracle Transition to Self/Existing State
-        else:
-            next_emission = choice_oracle[0] - 1
-            txt = 'Oracle Existing Transition to State'
-
-        m_oracle[next_emission] += 1  # increase state transition via oracle
-        p_txt = p_oracle[choice_oracle][0]
-
-    # Non-Oracle Transition to Self/Existing State
-    else:
-        next_emission = choice[0] - 1
-        txt = 'Existing Transition to State'
-        p_txt = p[choice][0]
-
-    # Append next state to state sequence and update counts
-    m[current_emission, next_emission] += 1
-
-    if verbose:
-        print(f'{txt} {next_emission} from {current_emission} with p={p_txt}')
-
-    assert m.shape[0] == K
-    assert m_oracle.shape[0] == K
-
-    return next_emission, m, m_oracle
-
-
-rng = np.random.default_rng(1337+8)
-
-alpha, beta, gamma = 2, 2, 8
-K = 10  # hidden states
-T = 250  # timesteps
-s = np.random.randint(K, size=T, dtype=np.int64)
-
-n = np.zeros(shape=(K, K), dtype=np.float64)
-n_oracle = np.zeros(shape=K, dtype=np.int64)
-
-# Create n
-np.add.at(n, (s[:-1], s[1:]), 1)
-
-current_state = s[-1]
-
-next_state, n, n_oracle = hdp_hidden(current_state, n, n_oracle, alpha, beta, gamma)
+    return equations
