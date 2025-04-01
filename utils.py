@@ -1,5 +1,6 @@
 import numpy as np
 
+from typing import Optional, Tuple
 from pickle import load
 from os.path import join
 from sympy import diff, exp, lambdify, symbols, IndexedBase
@@ -165,11 +166,61 @@ def generate_states(T: int,
                     alpha: float,
                     beta: float,
                     gamma: float,
-                    K: int = 0,
-                    s: np.ndarray = np.empty(shape=0, dtype=np.int64),
-                    n: np.ndarray = np.zeros(shape=(0, 0), dtype=np.float64),
-                    n_oracle: np.ndarray = np.zeros(shape=0, dtype=np.int64),
-                    debug: bool = False):
+                    s: Optional[np.ndarray] = None,
+                    oracle: Optional[np.ndarray] = None,
+                    n: Optional[np.ndarray] = None,
+                    n_oracle: Optional[np.ndarray] = None,
+                    debug: bool = False
+                    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Generates a hidden state sequence governed by the hyperparameters alpha, beta, and gamma using the infinite
+    hidden markov model (iHMM). Optionally, this function can accept a preexisting hidden state sequence, transition
+    matrix, and oracle vectors and extend them by T draws.
+
+    See: Beal, M., Ghahramani, Z. and Rasmussen, C., 2001. The Infinite Hidden Markov Model.
+
+    Args:
+        T: Number of draws from the iHMM.
+        alpha: Self-transition hyperparameter.
+        beta: Density of the transition matrix n hyperparameter.
+        gamma: Size (number of states K) of the transition matrix n hyperparameter.
+        s: Hidden state seqeuence, where a value of 0 indicates state 0.
+        oracle: Oracle indicator vector, where True at draw t means the oracle was used to generate the state at draw t.
+        n: Hidden state transtion matrix containing counts of size (K, K), where n[i, j] is the count of transitions
+        from state i to state j.
+        n_oracle: Oracle vector of length (K) where n_oracle[i] is the count of the number of times the oracle was used
+        to generate state i.
+        debug: If True, returns the result of each draw from the iHMM.
+
+    Returns:
+        s: in place modification
+        oracle: in place modification
+        n: in place modification
+        n_oracle: in place modification
+
+    Raises:
+        ValueError: Compares the sizes of s and oracle, and the shapes of n, and n_oracle with K.
+    """
+    if T < 0:
+        raise ValueError(f'Number of draws T={T} must be positive.')
+
+    if s is None:
+        if any(_ is not None for _ in (oracle, n, n_oracle)):
+            raise ValueError(f'Additional arguments were given when s was not.')
+        K = 0
+        s = np.zeros(0, dtype=np.int64)
+        oracle = np.zeros(0, dtype=bool)
+        n = np.zeros((K, K), dtype=np.float64)
+        n_oracle = np.zeros(K, dtype=np.int64)
+    else:
+        K = np.max(s) + 1
+        n = create_n(s, alpha) if n is None else n
+        if oracle is None:
+            if n_oracle is not None:
+                raise ValueError(f'n_oracle was given when oracle was not.')
+            oracle = np.zeros_like(s, dtype=bool)
+            n_oracle = np.zeros(K, dtype=np.int64)
+        else:
+            n_oracle = count_n_oracle(s, oracle) if n_oracle is None else n_oracle
 
     if n.shape[0] != K or n.shape[1] != K:
         raise ValueError(f'Transition matrix n should be of shape ({K}, {K}) but is instead '
@@ -178,37 +229,106 @@ def generate_states(T: int,
     if n_oracle.size != K:
         raise ValueError(f'Oracle vector n_oracle should be of length ({K}) but is instead of length ({n_oracle.size})')
 
+    if np.sum(oracle) != np.sum(n_oracle):
+        raise ValueError(f'Mismatch in oracle use between the oracle vector ({np.sum(n_oracle)}) '
+                         f'and oracle indicator vector ({np.sum(oracle)}).')
+
     if s.size > 0:
-        unique_states = np.unique(s)
-        if unique_states.size != K:
+        if np.unique(s).size != K:  # edge case
             raise ValueError(f'Number of hidden states ({unique_states.size}) does not match K = {K}')
 
-        if np.min(unique_states) != 0:
-            raise ValueError(f"Hidden state sequence should contain state 0: {unique_states}")
+        validate(s)
 
-        if np.mean(np.diff(unique_states) == 1) != 1.0:
-            raise ValueError(f"Hidden states are non-incremental: {unique_states}.")
+        if s.size != oracle.size:
+            raise ValueError(f"Hidden state vector (t = {s.size}) and oracle indicator vector (t = {oracle.size}) "
+                             f"should be same size.")
 
-    oracle = np.zeros(shape=T, dtype=bool)
+        if np.mean(n == count_n(s, alpha)) != 1.0:
+            raise ValueError(f'Transition matrix n does not match transitions found in hidden state sequence s.')
+
+    # Preallocate
+    _s = np.zeros(shape=T, dtype=np.int64)
+    _oracle = np.zeros(shape=T, dtype=bool)
+
     current_state, n_existing, nc = None, None, None
-
     for t in range(T):
         next_state, is_oracle, n, n_oracle, K = hdp_states(current_state, n, n_oracle, K,
                                                            alpha, beta, gamma, debug=debug)
-        oracle[t] = is_oracle
 
-        # Append next state to state sequence and update counts
-        s = np.append(s, next_state)
+        # Append next state to state sequence
+        _s[t] = next_state
+        _oracle[t] = is_oracle
+
         current_state = next_state
 
-        n_debug = np.zeros_like(n)
-        n_debug[np.diag_indices_from(n_debug)] += alpha
-        np.add.at(n_debug, (s[:-1], s[1:]), 1)
-        assert np.mean(n == n_debug) == 1
-        assert n.shape[0] == K
-        assert n_oracle.shape[0] == K
+    s = np.concatenate((s, _s))
+    oracle = np.concatenate((oracle, _oracle))
 
-    return s, oracle, K, n, n_oracle
+    if np.mean(n == count_n(s, alpha)) != 1.0:
+        raise ValueError(f'Transition matrix n does not match transitions found in hidden state sequence s.')
+
+    return s, oracle, n, n_oracle
+
+
+def count_n(s: np.ndarray,
+            alpha: float):
+    validate_s(s)
+
+    K = np.max(s) + 1
+    n = np.zeros(shape=(K, K), dtype=np.float64)
+    n[np.diag_indices_from(n)] += alpha
+    np.add.at(n, (s[:-1], s[1:]), 1)
+
+    return n
+
+
+def count_n_oracle(s: np.ndarray,
+                   oracle: np.ndarray):
+    validate_s(s)
+    validate_oracle(oracle)
+
+    if s.shape[0] != oracle.shape[0]:
+        raise ValueError('Hidden state sequence and oracle indicator sequence must be the same length.')
+
+    K = np.max(s) + 1
+    n_oracle = np.zeros(shape=K, dtype=np.int64)
+
+    for k in range(K):
+        n_oracle[k] = np.sum(np.logical_and(s == k, oracle))
+
+    return n_oracle
+
+
+def validate_oracle(oracle: np.ndarray):
+    if not isinstance(oracle, np.ndarray):
+        raise TypeError(f"Oracle indicator sequence must be a numpy array.")
+
+    if oracle.ndim != 1:
+        raise ValueError(f"Oracle indicator sequence must be a vector.")
+
+    if oracle.dtype != bool:
+        raise TypeError(f"Oracle indicator must be of type bool.")
+
+
+def validate_s(s: np.ndarray):
+    if not isinstance(s, np.ndarray):
+        raise TypeError(f"Hidden state sequence must be a numpy array.")
+
+    if s.ndim != 1:
+        raise ValueError(f"Hidden state sequence must be a vector.")
+
+    if s.dtype != np.int64:
+        raise TypeError(f"Hidden state sequence must be of type np.int64.")
+
+    if s.size > 0:
+        if np.min(s) != 0:
+            raise ValueError(f"Minimum hidden state element must be state 0, not state {np.min(s)}.")
+
+        if not np.all(np.diff(np.unique(s)) == 1):
+            raise ValueError(f"Hidden state elements must increase by 1 consecutively.")
+
+        if np.max(s) + 1 != np.unique(s).size:  # might be unreachable
+            raise ValueError(f"Number of hidden state elements does not match number in hidden state sequence.")
 
 
 def infer_emissions(y, s, K, Q, beta_e):

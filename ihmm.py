@@ -1,8 +1,10 @@
+import timeit
+
 import numpy as np
 import matplotlib.pyplot as plt
 
 from scipy import optimize
-from utils import hp_optimization_equations, hdp_states, infer_emissions, generate_states
+from utils import hp_optimization_equations, hdp_states, infer_emissions, generate_states, count_n_oracle
 
 
 # Import hyperparameter optimization equations
@@ -28,7 +30,15 @@ alpha, beta, gamma = 1, 1, 10000
 # Observation HDP
 beta_e, gamma_e = 1, 1
 
+s = np.random.randint(0, 6, (1000))
+oracle = np.random.randint(0, 2, (1000)).astype('bool')
+K = np.max(s) + 1
+n_oracle = count_n_oracle(s, oracle)
+
 # 3. Generate initial hidden state sequence s, n, n_oracle and K
+execution_time = timeit.timeit(lambda: generate_states(10000, alpha, beta, gamma, debug=False), number=1)
+print(f"Execution time: {execution_time} seconds")
+
 s, oracle, K, n, n_oracle = generate_states(T, alpha, beta, gamma, debug=True)
 
 # 4. Infer m and m_oracle (using beta_e)
