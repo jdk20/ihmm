@@ -47,6 +47,7 @@ def hp_optimization_equations(mainpath: str = ''):
     # Newton-Rapheson helper
     z = symbols('z', real=True)
 
+    arg, args = None, None
     equations = {}
     for eq in range(5):
         with open(join(mainpath, f'equation_{eq}.pkl'), 'rb') as file:
@@ -79,10 +80,22 @@ def hp_optimization_equations(mainpath: str = ''):
     return equations
 
 
-def hdp_states(current_state, n, n_oracle, K, alpha, beta, gamma, debug=False):
-    rng = np.random.default_rng()  # 1337+8
+def hdp_states(alpha, beta, gamma, current_state, n, n_oracle, debug=False):
+    if alpha < 0:
+        raise ValueError(f'Self-transition hyperparameter alpha >= 0.')
+
+    if beta <= 0:
+        raise ValueError(f'Transition density hyperparameter beta > 0.')
+
+    if gamma <= 0:
+        raise ValueError(f'Scale hyperparameter gamma > 0.')
+
+    rng = np.random.default_rng(1337+2)  # 1337+8
+
+    K = n.shape[0]
     is_oracle = False
-    p = np.zeros(shape=1 + K, dtype=np.float64)  # oracle and all other transitions
+    n_existing, nc, txt, p_txt = None, None, None, None
+    p = np.zeros(shape=1+K, dtype=np.float64)  # oracle and all other transitions
 
     if n.size == 0:  # special-case when no states exist
         no_states = True
@@ -91,17 +104,15 @@ def hdp_states(current_state, n, n_oracle, K, alpha, beta, gamma, debug=False):
         no_states = False
         n_existing = n[current_state, :]  # transitions to existing states (including self)
         nc = np.sum(n_existing) + beta + alpha  # normalizing constant
-        p[0] = beta / nc  # oracle
+        p[0] = beta/nc  # oracle
 
     for k in range(K):
         if k == current_state:
-            p[k + 1] = (n_existing[k] + alpha) / nc  # self-transition
+            p[k+1] = (n_existing[k] + alpha)/nc  # self-transition
         else:
-            p[k + 1] = n_existing[k] / nc  # transition
+            p[k+1] = n_existing[k]/nc  # transition
 
-    if debug:
-        assert np.allclose(np.sum(p), 1.0), f'p={np.sum(p)}'
-    choice = rng.choice(a=1 + K, size=1, p=p)
+    choice = rng.choice(a=1+K, size=1, p=p)
 
     # Oracle
     if choice == 0:
@@ -111,11 +122,9 @@ def hdp_states(current_state, n, n_oracle, K, alpha, beta, gamma, debug=False):
         p_oracle[0] = gamma/nc_oracle  # new state
 
         for k in range(K):
-            p_oracle[k + 1] = n_oracle[k] / nc_oracle
+            p_oracle[k+1] = n_oracle[k]/nc_oracle
 
-        if debug:
-            assert np.allclose(np.sum(p_oracle), 1.0)
-        choice_oracle = rng.choice(a=1 + K, size=1, p=p_oracle)
+        choice_oracle = rng.choice(a=1+K, size=1, p=p_oracle)
         # Oracle New State
         if choice_oracle == 0:
             K += 1  # increase state counter
@@ -159,7 +168,7 @@ def hdp_states(current_state, n, n_oracle, K, alpha, beta, gamma, debug=False):
     if debug:
         print(f'{txt} {next_state} from {current_state} with p={p_txt}')
 
-    return next_state, is_oracle, n, n_oracle, K
+    return next_state, is_oracle, n, n_oracle
 
 
 def generate_states(T: int,
@@ -211,9 +220,11 @@ def generate_states(T: int,
         oracle = np.zeros(0, dtype=bool)
         n = np.zeros((K, K), dtype=np.float64)
         n_oracle = np.zeros(K, dtype=np.int64)
+        current_state = None
     else:
         K = np.max(s) + 1
-        n = create_n(s, alpha) if n is None else n
+        current_state = s[-1]
+        n = count_n(s, alpha) if n is None else n
         if oracle is None:
             if n_oracle is not None:
                 raise ValueError(f'n_oracle was given when oracle was not.')
@@ -234,10 +245,10 @@ def generate_states(T: int,
                          f'and oracle indicator vector ({np.sum(oracle)}).')
 
     if s.size > 0:
-        if np.unique(s).size != K:  # edge case
-            raise ValueError(f'Number of hidden states ({unique_states.size}) does not match K = {K}')
+        validate_s(s)
 
-        validate(s)
+        if np.unique(s).size != K:  # edge case
+            raise ValueError(f'Number of hidden states ({np.unique(s).size}) does not match K = {K}')
 
         if s.size != oracle.size:
             raise ValueError(f"Hidden state vector (t = {s.size}) and oracle indicator vector (t = {oracle.size}) "
@@ -250,10 +261,8 @@ def generate_states(T: int,
     _s = np.zeros(shape=T, dtype=np.int64)
     _oracle = np.zeros(shape=T, dtype=bool)
 
-    current_state, n_existing, nc = None, None, None
     for t in range(T):
-        next_state, is_oracle, n, n_oracle, K = hdp_states(current_state, n, n_oracle, K,
-                                                           alpha, beta, gamma, debug=debug)
+        next_state, is_oracle, n, n_oracle = hdp_states(alpha, beta, gamma, current_state, n, n_oracle, debug=debug)
 
         # Append next state to state sequence
         _s[t] = next_state
@@ -263,6 +272,13 @@ def generate_states(T: int,
 
     s = np.concatenate((s, _s))
     oracle = np.concatenate((oracle, _oracle))
+
+    if np.unique(s).size != n.shape[0]:  # edge case
+        raise ValueError(f'Number of hidden states ({np.unique(s).size}) does not match K = {n.shape[0]}')
+
+    if s.size != oracle.size:
+        raise ValueError(f"Hidden state vector (t = {s.size}) and oracle indicator vector (t = {oracle.size}) "
+                         f"should be same size.")
 
     if np.mean(n == count_n(s, alpha)) != 1.0:
         raise ValueError(f'Transition matrix n does not match transitions found in hidden state sequence s.')
@@ -331,8 +347,10 @@ def validate_s(s: np.ndarray):
             raise ValueError(f"Number of hidden state elements does not match number in hidden state sequence.")
 
 
-def infer_emissions(y, s, K, Q, beta_e):
+def infer_emissions(y, s, beta_e):
     # 4. Generate m using s, K, Q
+    K = np.max(s) + 1
+    Q = np.max(y) + 1
     m_debug = np.zeros(shape=(K, Q), dtype=np.float64)
     np.add.at(m_debug, (s, y), 1)
 

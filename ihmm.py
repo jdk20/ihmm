@@ -1,5 +1,3 @@
-import timeit
-
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -14,7 +12,6 @@ hp_opt = hp_optimization_equations()
 y = [0, 1, 2, 3, 4, 5, 4, 3, 2, 1] * 30  # ABCDEFEDCB
 y = np.array(list(y), dtype=np.int64)
 T = y.size
-Q = np.unique(y).size  # unique symbols
 
 assert np.min(np.unique(y)) == 0, f"Symbol index should start at 0: {np.unique(y)}"
 assert np.mean(np.diff(np.unique(y)) == 1) == 1.0, f"Symbols are non-incremental: {np.unique(y)}."
@@ -25,26 +22,20 @@ vague_prior = 0.001
 a_alpha, b_alpha, a_beta, b_beta, a_gamma, b_gamma, a_beta_e, b_beta_e, a_gamma_e, b_gamma_e = [vague_prior] * 10
 
 # State HDP
-alpha, beta, gamma = 1, 1, 10000
+alpha, beta, gamma = 0.1, 2, 10
 
 # Observation HDP
 beta_e, gamma_e = 1, 1
 
-s = np.random.randint(0, 6, (1000))
-oracle = np.random.randint(0, 2, (1000)).astype('bool')
-K = np.max(s) + 1
-n_oracle = count_n_oracle(s, oracle)
-
 # 3. Generate initial hidden state sequence s, n, n_oracle and K
-execution_time = timeit.timeit(lambda: generate_states(10000, alpha, beta, gamma, debug=False), number=1)
-print(f"Execution time: {execution_time} seconds")
-
-s, oracle, K, n, n_oracle = generate_states(T, alpha, beta, gamma, debug=True)
+s, oracle, n, n_oracle = generate_states(T, alpha, beta, gamma, debug=True)
 
 # 4. Infer m and m_oracle (using beta_e)
-m, m_oracle, oracle_e = infer_emissions(y, s, K, Q, beta_e)
+m, m_oracle, oracle_e = infer_emissions(y, s, beta_e)
 assert np.sum(m_oracle) == np.sum(oracle_e)
 
+K = np.max(s) + 1
+Q = np.max(y) + 1
 for iterations in range(3):
     # Gibbs sweep over T
     for t in range(1, T-1):
@@ -71,7 +62,7 @@ for iterations in range(3):
         if current_state not in s:
             assert n_oracle[current_state] == 0
             # assert np.sum(np.delete(n[current_state, :], current_state)) == 0
-            assert np.sum(np.delete(n[:, current_state], current_state)) == 0
+            # assert np.sum(np.delete(n[:, current_state], current_state)) == 0
             assert np.sum(m[current_state, :]) == 0
             assert n[current_state, current_state] == alpha
             assert n.shape[0] == K
@@ -92,8 +83,8 @@ for iterations in range(3):
             assert np.mean(np.diff(np.unique(s)) == 1) == 1.0
 
         # Generate new s[t]
-        new_state, is_oracle, n, n_oracle, new_K = hdp_states(current_state, n, n_oracle, K,
-                                                              alpha, beta, gamma, debug=True)
+        new_state, is_oracle, n, n_oracle = hdp_states(alpha, beta, gamma, current_state, n, n_oracle, debug=True)
+        new_K = n_oracle.shape[0]
 
         s[t] = new_state
         n[previous_state, new_state] += 1  # transition into

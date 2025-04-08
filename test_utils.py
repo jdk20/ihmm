@@ -181,5 +181,55 @@ class TestCountNOracle(unittest.TestCase):
                 self.assertEqual(np.sum(oracle), np.sum(n_oracle))
 
 
+class TestGenerateStates(unittest.TestCase):
+    def setUp(self):
+        self.T, self.alpha, self.beta, self.gamma = 1, 1, 1, 1
+        self.s = np.array([0, 1, 2, 3], dtype=np.int64)
+        self.oracle = np.array([True, True, True, True], dtype=bool)
+        self.n_oracle = count_n_oracle(self.s, self.oracle)
+        self.n = count_n(self.s, alpha=self.alpha)
+
+    def test_valid_args_none(self):
+        generate_states(self.T, self.alpha, self.beta, self.gamma)
+
+    def test_valid_args_s(self):
+        generate_states(self.T, self.alpha, self.beta, self.gamma, s=self.s)
+
+    def test_valid_args_s_oracle(self):
+        generate_states(self.T, self.alpha, self.beta, self.gamma, s=self.s, oracle=self.oracle)
+
+    def test_valid_args_s_n(self):
+        generate_states(self.T, self.alpha, self.beta, self.gamma, s=self.s, n=self.n)
+
+    def test_valid_args_s_oracle_n(self):
+        generate_states(self.T, self.alpha, self.beta, self.gamma, s=self.s, oracle=self.oracle, n=self.n)
+
+    def test_valid_args_s_oracle_n_oracle(self):
+        generate_states(self.T, self.alpha, self.beta, self.gamma, s=self.s,
+                        oracle=self.oracle, n_oracle=self.n_oracle)
+
+    def test_valid_args_all(self):
+        generate_states(self.T, self.alpha, self.beta, self.gamma, s=self.s,
+                        oracle=self.oracle, n=self.n, n_oracle=self.n_oracle)
+
+    def test_invalid_args_no_s(self):
+        with self.assertRaises(ValueError) as context:
+            generate_states(self.T, self.alpha, self.beta, self.gamma, oracle=self.oracle)
+        self.assertEqual(str(context.exception), "Additional arguments were given when s was not.")
+
+        with self.assertRaises(ValueError) as context:
+            generate_states(self.T, self.alpha, self.beta, self.gamma, n_oracle=self.n_oracle)
+        self.assertEqual(str(context.exception), "Additional arguments were given when s was not.")
+
+        with self.assertRaises(ValueError) as context:
+            generate_states(self.T, self.alpha, self.beta, self.gamma, n=self.n)
+        self.assertEqual(str(context.exception), "Additional arguments were given when s was not.")
+
+    def test_invalid_args_s_n_oracle(self):
+        with self.assertRaises(ValueError) as context:
+            generate_states(self.T, self.alpha, self.beta, self.gamma, s=self.s, n_oracle=self.n_oracle)
+        self.assertEqual(str(context.exception), "n_oracle was given when oracle was not.")
+
+
 if __name__ == '__main__':
     unittest.main()
