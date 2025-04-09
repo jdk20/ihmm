@@ -80,7 +80,7 @@ def hp_optimization_equations(mainpath: str = ''):
     return equations
 
 
-def hdp_states(alpha, beta, gamma, current_state, n, n_oracle, debug=False):
+def hdp_states(alpha, beta, gamma, current_state, n, n_oracle):
     if alpha < 0:
         raise ValueError(f'Self-transition hyperparameter alpha >= 0.')
 
@@ -90,9 +90,9 @@ def hdp_states(alpha, beta, gamma, current_state, n, n_oracle, debug=False):
     if gamma <= 0:
         raise ValueError(f'Scale hyperparameter gamma > 0.')
 
-    rng = np.random.default_rng(1337+2)  # 1337+8
+    rng = np.random.default_rng()
 
-    K = n.shape[0]
+    K = n.shape[1]
     is_oracle = False
     n_existing, nc, txt, p_txt = None, None, None, None
     p = np.zeros(shape=1+K, dtype=np.float64)  # oracle and all other transitions
@@ -136,37 +136,20 @@ def hdp_states(alpha, beta, gamma, current_state, n, n_oracle, debug=False):
 
             # Add alpha to self-transition prob for new state
             n[next_state, next_state] += alpha
-            if debug:
-                txt = 'Oracle New State'
+
         # Oracle Transition to Self/Existing State
         else:
             next_state = choice_oracle[0] - 1
-            if debug:
-                if current_state == next_state:
-                    txt = 'Oracle Self-Transition to State'
-                else:
-                    txt = 'Oracle Existing Transition to State'
 
         n_oracle[next_state] += 1  # increase state transition via oracle
         is_oracle = True
-        if debug:
-            p_txt = p_oracle[choice_oracle][0]
 
     # Non-Oracle Transition to Self/Existing State
     else:
         next_state = choice[0] - 1
-        if debug:
-            if current_state == next_state:
-                txt = 'Self-Transition to State'
-            else:
-                txt = 'Existing Transition to State'
-            p_txt = p[choice][0]
 
     if not no_states:
         n[current_state, next_state] += 1
-
-    if debug:
-        print(f'{txt} {next_state} from {current_state} with p={p_txt}')
 
     return next_state, is_oracle, n, n_oracle
 
@@ -179,7 +162,6 @@ def generate_states(T: int,
                     oracle: Optional[np.ndarray] = None,
                     n: Optional[np.ndarray] = None,
                     n_oracle: Optional[np.ndarray] = None,
-                    debug: bool = False
                     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Generates a hidden state sequence governed by the hyperparameters alpha, beta, and gamma using the infinite
     hidden markov model (iHMM). Optionally, this function can accept a preexisting hidden state sequence, transition
@@ -198,7 +180,6 @@ def generate_states(T: int,
         from state i to state j.
         n_oracle: Oracle vector of length (K) where n_oracle[i] is the count of the number of times the oracle was used
         to generate state i.
-        debug: If True, returns the result of each draw from the iHMM.
 
     Returns:
         s: in place modification
@@ -262,7 +243,7 @@ def generate_states(T: int,
     _oracle = np.zeros(shape=T, dtype=bool)
 
     for t in range(T):
-        next_state, is_oracle, n, n_oracle = hdp_states(alpha, beta, gamma, current_state, n, n_oracle, debug=debug)
+        next_state, is_oracle, n, n_oracle = hdp_states(alpha, beta, gamma, current_state, n, n_oracle)
 
         # Append next state to state sequence
         _s[t] = next_state

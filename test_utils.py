@@ -181,6 +181,115 @@ class TestCountNOracle(unittest.TestCase):
                 self.assertEqual(np.sum(oracle), np.sum(n_oracle))
 
 
+class TestHDPStates(unittest.TestCase):
+    def setUp(self):
+        self.max_iter = 1000
+        self.ni = [[0], [0, 0, 0, 0, 0], [1], [1, 1, 1, 1, 1], [1, 2, 3, 4, 5], [11, 0, 11, 0, 11]]
+
+    @staticmethod
+    def dp_states_1(ni, i, alpha, beta):
+        denominator = np.sum(ni) + beta + alpha
+        ni[i] += alpha
+        ni = np.append(ni, beta)
+        p = ni/denominator
+
+        return p
+
+    @staticmethod
+    def dp_states_2(n_oracle, gamma):
+        denominator = np.sum(n_oracle) + gamma
+        n_oracle = np.append(n_oracle, gamma)
+        p = n_oracle/denominator
+
+        return p
+
+    def hdp_draws(self, alpha, beta, gamma, current_state, ni, no):
+        K = len(ni)
+        oracle_count = 0
+        dp_1_counts = np.zeros(K + 1, dtype=np.float64)  # K states and beta
+        dp_2_counts = np.zeros(K + 1, dtype=np.float64)  # K states and gamma
+        for i in range(self.max_iter):
+            n = np.zeros((K, K), dtype=np.float64)
+            n_oracle = np.array(no)  # disable oracle transitions
+            n[current_state, :] = ni
+            next_state, is_oracle, _, _ = hdp_states(alpha, beta, gamma, current_state, n, n_oracle)
+
+            if is_oracle:  # indicates second DP was called
+                dp_1_counts[-1] += 1  # increments beta counter
+                dp_2_counts[next_state] += 1
+                oracle_count += 1
+            else:
+                dp_1_counts[next_state] += 1
+
+        # Reset n and n_oracle
+        n = np.zeros((K, K), dtype=np.float64)
+        n[current_state, :] = ni
+        n_oracle = np.array(no)
+
+        # First DP
+        p_simulated_1 = dp_1_counts/self.max_iter
+        p_exact_1 = self.dp_states_1(n[current_state, :], current_state, alpha, beta)
+
+        # Second DP
+        p_simulated_2 = dp_2_counts/oracle_count
+        p_exact_2 = self.dp_states_2(n_oracle, gamma)
+
+        return p_exact_1, p_simulated_1, p_exact_2, p_simulated_2
+
+    def test_zero_alpha(self):
+        current_state = 0
+        alpha, beta, gamma = 0, 1, 1
+
+        for ni in self.ni:
+            p_exact_1, p_simulated_1, _, _ = self.hdp_draws(alpha, beta, gamma, current_state, ni, [0] * len(ni))
+            mae = np.mean(np.abs(p_exact_1 - p_simulated_1))
+            self.assertLess(mae, 0.1, f"MAE: {mae}, exact: {p_exact_1}, simulated: {p_simulated_1}")
+
+    def test_low_beta(self):
+        current_state = 0
+        alpha, beta, gamma = 1, 1, 1
+
+        for ni in self.ni:
+            p_exact_1, p_simulated_1, _, _ = self.hdp_draws(alpha, beta, gamma, current_state, ni, [0] * len(ni))
+            mae = np.mean(np.abs(p_exact_1 - p_simulated_1))
+            self.assertLess(mae, 0.1, f"MAE: {mae}, exact: {p_exact_1}, simulated: {p_simulated_1}")
+
+    def test_self_transitions(self):
+        alpha, beta, gamma = 8, 1, 1
+        ni = [1, 2, 3, 4, 5]
+        for current_state in [0, 1, 2, 3, 4]:
+            p_exact_1, p_simulated_1, _, _ = self.hdp_draws(alpha, beta, gamma, current_state, ni, [0] * len(ni))
+            mae = np.mean(np.abs(p_exact_1 - p_simulated_1))
+            self.assertLess(mae, 0.1, f"MAE: {mae}, exact: {p_exact_1}, simulated: {p_simulated_1}")
+
+    def test_high_beta(self):
+        current_state = 0
+        alpha, beta, gamma = 1, 1000, 1
+
+        for ni in self.ni:
+            p_exact_1, p_simulated_1, _, _ = self.hdp_draws(alpha, beta, gamma, current_state, ni, [0] * len(ni))
+            mae = np.mean(np.abs(p_exact_1 - p_simulated_1))
+            self.assertLess(mae, 0.1, f"MAE: {mae}, exact: {p_exact_1}, simulated: {p_simulated_1}")
+
+    def test_low_gamma(self):
+        current_state = 0
+        alpha, beta, gamma = 1, 100, 1
+
+        for ni in self.ni:
+            _, _, p_exact_2, p_simulated_2 = self.hdp_draws(alpha, beta, gamma, current_state, ni, [0] * len(ni))
+            mae = np.mean(np.abs(p_exact_2 - p_simulated_2))
+            self.assertLess(mae, 0.1, f"MAE: {mae}, exact: {p_exact_2}, simulated: {p_simulated_2}")
+
+    def test_high_gamma(self):
+        current_state = 0
+        alpha, beta, gamma = 1, 100, 10000
+
+        for ni in self.ni:
+            _, _, p_exact_2, p_simulated_2 = self.hdp_draws(alpha, beta, gamma, current_state, ni, [0] * len(ni))
+            mae = np.mean(np.abs(p_exact_2 - p_simulated_2))
+            self.assertLess(mae, 0.1, f"MAE: {mae}, exact: {p_exact_2}, simulated: {p_simulated_2}")
+
+
 class TestGenerateStates(unittest.TestCase):
     def setUp(self):
         self.T, self.alpha, self.beta, self.gamma = 1, 1, 1, 1
